@@ -16,20 +16,23 @@
 package com.google.idea.blaze.base.run.producers;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.util.concurrent.MoreExecutors;
 import com.google.idea.blaze.base.dependencies.TargetInfo;
 import com.google.idea.blaze.base.ideinfo.TargetIdeInfo;
 import com.google.idea.blaze.base.ideinfo.TargetKey;
 import com.google.idea.blaze.base.ideinfo.TargetMap;
 import com.google.idea.blaze.base.model.BlazeProjectData;
-import com.google.idea.blaze.base.model.primitives.GenericBlazeRules;
+import com.google.idea.blaze.base.model.primitives.GenericBlazeRules.RuleTypes;
 import com.google.idea.blaze.base.model.primitives.Label;
 import com.google.idea.blaze.base.model.primitives.TargetExpression;
 import com.google.idea.blaze.base.run.BlazeCommandRunConfiguration;
 import com.google.idea.blaze.base.run.BlazeCommandRunConfigurationType;
+import com.google.idea.blaze.base.run.PendingRunConfigurationContext;
 import com.google.idea.blaze.base.sync.data.BlazeProjectDataManager;
 import com.google.idea.blaze.base.targetmaps.ReverseDependencyMap;
 import com.intellij.execution.actions.ConfigurationContext;
 import com.intellij.execution.actions.ConfigurationFromContext;
+import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.popup.JBPopupFactory;
 import com.intellij.openapi.util.Ref;
@@ -40,6 +43,7 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 import javax.swing.ListSelectionModel;
+import org.jetbrains.ide.PooledThreadExecutor;
 
 /**
  * Common run configuration producer for web_test wrapped language-specific tests.
@@ -67,37 +71,55 @@ public class BlazeWebTestConfigurationProducer
     if (!delegate.doSetupConfigFromContext(configuration, context, sourceElement)) {
       return false;
     }
-
-    TargetExpression targetExpression = configuration.getTarget();
-    if (!(targetExpression instanceof Label)) {
-      return false;
-    }
-    Label label = (Label) targetExpression;
-
     Project project = context.getProject();
     BlazeProjectData projectData =
         BlazeProjectDataManager.getInstance(project).getBlazeProjectData();
     if (projectData == null) {
       return false;
     }
-    TargetMap targetMap = projectData.getTargetMap();
+    if (configuration.getTarget() == null) {
+      PendingRunConfigurationContext pendingContext = configuration.getPendingContext();
+      if (pendingContext != null) {
+        pendingContext
+            .getFuture()
+            .addListener(
+                () -> updateConfiguration(project, projectData, configuration),
+                ApplicationManager.getApplication().isUnitTestMode()
+                    ? MoreExecutors.directExecutor()
+                    : PooledThreadExecutor.INSTANCE);
+        return true;
+      }
+    }
+    return updateConfiguration(project, projectData, configuration);
+  }
 
-    // Wrong kind to prevent the language-specific debug runner from interfering.
-    // The target will be updated to match the kind at the end.
-    configuration.setTargetInfo(
-        TargetInfo.builder(label, GenericBlazeRules.RuleTypes.WEB_TEST.toString()).build());
-    return ReverseDependencyMap.get(project).get(TargetKey.forPlainTarget(label)).stream()
+  private static boolean updateConfiguration(
+      Project project, BlazeProjectData projectData, BlazeCommandRunConfiguration configuration) {
+    TargetExpression targetExpression = configuration.getTarget();
+    if (!(targetExpression instanceof Label)) {
+      return false;
+    }
+    Label label = (Label) targetExpression;
+    TargetMap targetMap = projectData.getTargetMap();
+    if (ReverseDependencyMap.get(project).get(TargetKey.forPlainTarget(label)).stream()
         .map(targetMap::get)
         .filter(Objects::nonNull)
         .map(TargetIdeInfo::getKind)
-        .anyMatch(kind -> kind == GenericBlazeRules.RuleTypes.WEB_TEST.getKind());
+        .noneMatch(kind -> kind == RuleTypes.WEB_TEST.getKind())) {
+      return false;
+    }
+    // Wrong kind to prevent the language-specific debug runner from interfering.
+    // The target will be updated to match the kind at the end.
+    configuration.setTargetInfo(
+        TargetInfo.builder(label, RuleTypes.WEB_TEST.getKind().getKindString()).build());
+    return true;
   }
 
   @Override
   protected boolean doIsConfigFromContext(
       BlazeCommandRunConfiguration configuration, ConfigurationContext context) {
     return delegate.doIsConfigFromContext(configuration, context)
-        && configuration.getTargetKind() == GenericBlazeRules.RuleTypes.WEB_TEST.getKind();
+        && configuration.getTargetKind() == RuleTypes.WEB_TEST.getKind();
   }
 
   @Override
@@ -135,7 +157,7 @@ public class BlazeWebTestConfigurationProducer
     return ReverseDependencyMap.get(project).get(TargetKey.forPlainTarget(wrappedTest)).stream()
         .map(targetMap::get)
         .filter(Objects::nonNull)
-        .filter(t -> t.getKind() == GenericBlazeRules.RuleTypes.WEB_TEST.getKind())
+        .filter(t -> t.getKind() == RuleTypes.WEB_TEST.getKind())
         .map(TargetIdeInfo::getKey)
         .map(TargetKey::getLabel)
         .sorted()
@@ -180,18 +202,25 @@ public class BlazeWebTestConfigurationProducer
 
   private static void updateConfigurationName(
       BlazeCommandRunConfiguration configuration, Label wrappedTest, Label wrapperTest) {
-    String wrappedTestSuffix = "_wrapped_test";
+    List<String> wrappedTestSuffixes = getWrappedTestSuffixes();
     String wrappedName = wrappedTest.targetName().toString();
-    if (!wrappedName.endsWith(wrappedTestSuffix)) {
+    for (String suffix : wrappedTestSuffixes) {
+      if (!wrappedName.endsWith(suffix)) {
+        continue;
+      }
+      String baseName = wrappedName.substring(0, wrappedName.lastIndexOf(suffix)) + '_';
+      String wrapperName = wrapperTest.targetName().toString();
+      if (!wrapperName.startsWith(baseName)) {
+        continue;
+      }
+      String platform = wrapperName.substring(baseName.length());
+      configuration.setName(configuration.getName() + " on " + platform);
       return;
     }
-    String baseName = wrappedName.substring(0, wrappedName.lastIndexOf(wrappedTestSuffix)) + '_';
-    String wrapperName = wrapperTest.targetName().toString();
-    if (!wrapperName.startsWith(baseName)) {
-      return;
-    }
-    String platform = wrapperName.substring(baseName.length());
-    configuration.setName(configuration.getName() + " on " + platform);
+  }
+
+  public static ImmutableList<String> getWrappedTestSuffixes() {
+    return ImmutableList.of("_wrapped_test", "_debug");
   }
 
   @Override
