@@ -15,23 +15,29 @@
  */
 package com.google.idea.blaze.base.settings.ui;
 
+import static com.google.common.collect.ImmutableList.toImmutableList;
+
 import com.google.common.base.Objects;
 import com.google.common.base.Strings;
+import com.google.common.collect.ImmutableCollection;
 import com.google.idea.blaze.base.bazel.BuildSystemProvider;
 import com.google.idea.blaze.base.settings.Blaze;
 import com.google.idea.blaze.base.settings.BlazeUserSettings;
 import com.google.idea.blaze.base.settings.BlazeUserSettings.FocusBehavior;
 import com.google.idea.blaze.base.settings.BuildSystem;
-import com.google.idea.blaze.base.settings.SearchableOptionsHelper;
 import com.google.idea.blaze.base.ui.FileSelectorWithStoredHistory;
+import com.google.idea.common.settings.SearchableOption;
 import com.intellij.openapi.options.UnnamedConfigurable;
 import com.intellij.openapi.ui.ComboBox;
 import com.intellij.ui.IdeBorderFactory;
+import com.intellij.ui.components.JBCheckBox;
+import com.intellij.ui.components.JBLabel;
 import com.intellij.uiDesigner.core.GridConstraints;
 import com.intellij.uiDesigner.core.GridLayoutManager;
 import com.intellij.uiDesigner.core.Spacer;
 import com.intellij.util.ui.JBFont;
 import com.intellij.util.ui.JBUI;
+import java.util.Arrays;
 import javax.swing.Box;
 import javax.swing.JCheckBox;
 import javax.swing.JComponent;
@@ -45,15 +51,18 @@ public class BlazeUserSettingsConfigurable implements UnnamedConfigurable {
 
   static class UiContributor implements BlazeUserSettingsCompositeConfigurable.UiContributor {
     @Override
-    public UnnamedConfigurable getConfigurable(SearchableOptionsHelper helper) {
-      return new BlazeUserSettingsConfigurable(helper);
+    public UnnamedConfigurable getConfigurable() {
+      return new BlazeUserSettingsConfigurable();
+    }
+
+    @Override
+    public ImmutableCollection<SearchableOption> getSearchableOptions() {
+      return Arrays.stream(Option.values()).map(o -> o.option).collect(toImmutableList());
     }
   }
 
   private static final String BLAZE_BINARY_PATH_KEY = "blaze.binary.path";
   public static final String BAZEL_BINARY_PATH_KEY = "bazel.binary.path";
-  public static final String SHOW_ADD_FILE_TO_PROJECT_LABEL_TEXT =
-      "Show 'Add source to project' editor notifications";
 
   private final JPanel panel;
 
@@ -71,8 +80,8 @@ public class BlazeUserSettingsConfigurable implements UnnamedConfigurable {
   private FileSelectorWithStoredHistory blazeBinaryPathField;
   private FileSelectorWithStoredHistory bazelBinaryPathField;
 
-  private BlazeUserSettingsConfigurable(SearchableOptionsHelper helper) {
-    panel = setupUi(helper);
+  private BlazeUserSettingsConfigurable() {
+    panel = setupUi();
   }
 
   @Override
@@ -127,7 +136,52 @@ public class BlazeUserSettingsConfigurable implements UnnamedConfigurable {
     return panel;
   }
 
-  private JPanel setupUi(SearchableOptionsHelper helper) {
+  /** Options for Blaze base settings. */
+  public enum Option {
+    TOOL_WINDOW_POPUP_BEHAVIOR("Tool window popup behavior"),
+    SHOW_CONSOLE_ON_SYNC(
+        SearchableOption.withLabel("On Sync:")
+            .setSearchResult(
+                String.format("Show %s Console on sync", Blaze.defaultBuildSystemName()))
+            .build()),
+    SHOW_CONSOLE_ON_RUN(
+        SearchableOption.withLabel("For Run/Debug actions:")
+            .setSearchResult(
+                String.format(
+                    "Show %s Console for run/debug actions", Blaze.defaultBuildSystemName()))
+            .build()),
+    SHOW_PROBLEMS_VIEW_ON_SYNC(
+        SearchableOption.withLabel("On Sync:")
+            .setSearchResult("Show Problems View on sync")
+            .build()),
+    SHOW_PROBLEMS_VIEW_ON_RUN(
+        SearchableOption.withLabel("For Run/Debug actions:")
+            .setSearchResult("Show Problems View for run/debug actions")
+            .build()),
+
+    COLLAPSE_PROJECT_VIEW("Collapse project view directory roots"),
+    FORMAT_BUILD_FILES_ON_SAVE("Automatically format BUILD/Skylark files on file save"),
+    SHOW_ADD_FILE_TO_PROJECT("Show 'Add source to project' editor notifications"),
+
+    BLAZE_BINARY_PATH("Blaze binary location"),
+    BAZEL_BINARY_PATH("Bazel binary location");
+
+    private final SearchableOption option;
+
+    Option(SearchableOption option) {
+      this.option = option;
+    }
+
+    Option(String label) {
+      option = SearchableOption.withLabel(label).build();
+    }
+
+    public String label() {
+      return option.label();
+    }
+  }
+
+  private JPanel setupUi() {
     final int totalRowSize = 8;
     int rowi = 0;
 
@@ -135,7 +189,7 @@ public class BlazeUserSettingsConfigurable implements UnnamedConfigurable {
     panel.setLayout(new GridLayoutManager(totalRowSize, 2, JBUI.emptyInsets(), -1, -1));
 
     panel.add(
-        getFocusBehaviorSettingsUi(helper),
+        getFocusBehaviorSettingsUi(),
         new GridConstraints(
             rowi++,
             0,
@@ -152,8 +206,7 @@ public class BlazeUserSettingsConfigurable implements UnnamedConfigurable {
             false));
     panel.add(new JSeparator(SwingConstants.HORIZONTAL), defaultNoGrowConstraints(rowi++, 0, 1, 2));
 
-    String text = "Collapse project view directory roots";
-    collapseProjectView = helper.createSearchableCheckBox(text, true);
+    collapseProjectView = new JBCheckBox(Option.COLLAPSE_PROJECT_VIEW.label());
     collapseProjectView.setSelected(false);
     panel.add(
         collapseProjectView,
@@ -171,8 +224,7 @@ public class BlazeUserSettingsConfigurable implements UnnamedConfigurable {
             null,
             0,
             false));
-    text = "Automatically format BUILD/Skylark files on file save";
-    formatBuildFilesOnSave = helper.createSearchableCheckBox(text, true);
+    formatBuildFilesOnSave = new JBCheckBox(Option.FORMAT_BUILD_FILES_ON_SAVE.label());
     formatBuildFilesOnSave.setSelected(false);
     panel.add(
         formatBuildFilesOnSave,
@@ -190,8 +242,7 @@ public class BlazeUserSettingsConfigurable implements UnnamedConfigurable {
             null,
             0,
             false));
-    showAddFileToProjectNotification =
-        helper.createSearchableCheckBox(SHOW_ADD_FILE_TO_PROJECT_LABEL_TEXT, true);
+    showAddFileToProjectNotification = new JBCheckBox(Option.SHOW_ADD_FILE_TO_PROJECT.label());
     showAddFileToProjectNotification.setSelected(false);
     panel.add(
         showAddFileToProjectNotification,
@@ -219,17 +270,11 @@ public class BlazeUserSettingsConfigurable implements UnnamedConfigurable {
 
     if (BuildSystemProvider.isBuildSystemAvailable(BuildSystem.Blaze)) {
       addBinaryLocationSetting(
-          panel,
-          helper.createSearchableLabel("Blaze binary location", true),
-          blazeBinaryPathField,
-          rowi++);
+          panel, new JBLabel(Option.BLAZE_BINARY_PATH.label()), blazeBinaryPathField, rowi++);
     }
     if (BuildSystemProvider.isBuildSystemAvailable(BuildSystem.Bazel)) {
       addBinaryLocationSetting(
-          panel,
-          helper.createSearchableLabel("Bazel binary location", true),
-          bazelBinaryPathField,
-          rowi++);
+          panel, new JBLabel(Option.BAZEL_BINARY_PATH.label()), bazelBinaryPathField, rowi++);
     }
 
     panel.add(
@@ -270,21 +315,20 @@ public class BlazeUserSettingsConfigurable implements UnnamedConfigurable {
         false);
   }
 
-  private JComponent getFocusBehaviorSettingsUi(SearchableOptionsHelper helper) {
+  private JComponent getFocusBehaviorSettingsUi() {
     JPanel panel = new JPanel();
-    panel.setBorder(IdeBorderFactory.createTitledBorder("Tool window popup behavior", false));
+    panel.setBorder(
+        IdeBorderFactory.createTitledBorder(Option.TOOL_WINDOW_POPUP_BEHAVIOR.label(), false));
     panel.setLayout(new GridLayoutManager(3, 6, JBUI.emptyInsets(), -1, -1));
 
     // blaze console settings
-    JLabel label =
-        helper.createSearchableLabel(
-            String.format("%s Console", Blaze.defaultBuildSystemName()), true);
+    JLabel label = new JBLabel(String.format("%s Console", Blaze.defaultBuildSystemName()));
     label.setFont(JBFont.create(label.getFont()).asBold());
     panel.add(label, defaultNoGrowConstraints(0, 0, 1, 3));
-    panel.add(helper.createSearchableLabel("On Sync:", true), defaultNoGrowConstraints(1, 0, 1, 1));
     panel.add(
-        helper.createSearchableLabel("For Run/Debug actions:", true),
-        defaultNoGrowConstraints(2, 0, 1, 1));
+        new JBLabel(Option.SHOW_CONSOLE_ON_SYNC.label()), defaultNoGrowConstraints(1, 0, 1, 1));
+    panel.add(
+        new JBLabel(Option.SHOW_CONSOLE_ON_RUN.label()), defaultNoGrowConstraints(2, 0, 1, 1));
     panel.add(showBlazeConsoleOnSync, defaultNoGrowConstraints(1, 1, 1, 1));
     panel.add(showBlazeConsoleOnRun, defaultNoGrowConstraints(2, 1, 1, 1));
     panel.add(
@@ -305,12 +349,14 @@ public class BlazeUserSettingsConfigurable implements UnnamedConfigurable {
             false));
 
     // problems view settings
-    label = helper.createSearchableLabel("Problems View", true);
+    label = new JBLabel("Problems View");
     label.setFont(JBFont.create(label.getFont()).asBold());
     panel.add(label, defaultNoGrowConstraints(0, 3, 1, 3));
-    panel.add(helper.createSearchableLabel("On Sync:", true), defaultNoGrowConstraints(1, 3, 1, 1));
     panel.add(
-        helper.createSearchableLabel("For Run/Debug actions:", true),
+        new JBLabel(Option.SHOW_PROBLEMS_VIEW_ON_SYNC.label()),
+        defaultNoGrowConstraints(1, 3, 1, 1));
+    panel.add(
+        new JBLabel(Option.SHOW_PROBLEMS_VIEW_ON_RUN.label()),
         defaultNoGrowConstraints(2, 3, 1, 1));
     panel.add(showProblemsViewOnSync, defaultNoGrowConstraints(1, 4, 1, 1));
     panel.add(showProblemsViewOnRun, defaultNoGrowConstraints(2, 4, 1, 1));
